@@ -20,7 +20,6 @@ Pose des questions à tes documents (CV, factures, contrats, notes, cours, PDF s
 Prérequis : Docker (avec `docker compose`) et [Ollama](https://ollama.com) installés sur le PC.
 
 ```bash
-make stop-ancien   # si l'ancienne version tournait : libère la RAM et le port 5678
 make install       # configure Ollama (sudo, une fois), télécharge modèles + images, démarre
 ```
 
