@@ -1,0 +1,168 @@
+# Assistant RAG local.
+#   Sur le PC (hôte) : Ollama (LLM + embeddings)  → une seule copie du modèle en mémoire
+#   Dans Docker      : rag (API + interface + OCR), qdrant (index), searxng (internet), n8n (automatisations)
+name: mon-rag
+
+x-base: &base
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+x-dns: &dns
+  # Sans DNS explicites, les conteneurs héritent parfois de 127.0.0.53 (injoignable depuis Docker)
+  dns:
+    - ${DNS_1:-1.1.1.1}
+    - ${DNS_2:-9.9.9.9}
+
+services:
+  rag:
+    <<: [*base, *dns]
+    build:
+      context: ./app
+      args:
+        UID: ${HOST_UID:-1000}
+        GID: ${HOST_GID:-1000}
+    image: mon-rag-app:local
+    environment:
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      CHAT_MODEL: ${CHAT_MODEL:-gpt-oss:20b}
+      EMBED_MODEL: ${EMBED_MODEL:-bge-m3}
+      OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-16384}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+      LLM_THINK: ${LLM_THINK:-low}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.2}
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-documents}
+      SEARXNG_URL: http://searxng:8080
+      CHUNK_SIZE: ${CHUNK_SIZE:-1200}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-200}
+      TOP_K: ${TOP_K:-6}
+      MIN_SCORE: ${MIN_SCORE:-0.40}
+      MEMORY_TURNS: ${MEMORY_TURNS:-4}
+      QUERY_ROUTER: ${QUERY_ROUTER:-1}
+      WEB_SEARCH: ${WEB_SEARCH:-auto}
+      WEB_RESULTS: ${WEB_RESULTS:-4}
+      WEB_LANG: ${WEB_LANG:-fr}
+      INDEX_INTERVAL: ${INDEX_INTERVAL:-30}
+      OCR_LANGS: ${OCR_LANGS:-fra+eng}
+      MAX_FILE_MB: ${MAX_FILE_MB:-200}
+      CHAT_USER: ${CHAT_USER:-moi}
+      CHAT_PASSWORD: ${CHAT_PASSWORD}
+      RAG_API_TOKEN: ${RAG_API_TOKEN}
+      TIMEZONE: ${TIMEZONE:-Europe/Paris}
+      TZ: ${TIMEZONE:-Europe/Paris}
+      # Pour `make n8n-setup` (création du compte n8n)
+      N8N_INTERNAL_URL: http://n8n:5678
+      N8N_OWNER_EMAIL: ${N8N_OWNER_EMAIL}
+      N8N_OWNER_PASSWORD: ${N8N_OWNER_PASSWORD}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:${RAG_PORT:-8000}:8000"
+    volumes:
+      - ./documents:/data/documents
+      - rag_state:/data/state
+    depends_on:
+      qdrant:
+        condition: service_started
+      searxng:
+        condition: service_started
+
+  qdrant:
+    <<: *base
+    image: qdrant/qdrant:${QDRANT_VERSION:-v1.13.4}
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY}
+      QDRANT__TELEMETRY_DISABLED: "true"
+    # Pas de port publié : seul le service rag l'interroge
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  searxng:
+    <<: [*base, *dns]
+    image: searxng/searxng:${SEARXNG_VERSION:-latest}
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET}
+      SEARXNG_BASE_URL: http://searxng:8080/
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETGID, SETUID]
+
+  # Avant chaque démarrage de n8n : identifiants + workflows du projet (importés une fois par version)
+  n8n-import:
+    <<: [*dns]
+    image: n8nio/n8n:${N8N_VERSION:-2.45.7}
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    environment: &n8n-env
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      N8N_USER_MANAGEMENT_JWT_SECRET: ${N8N_JWT_SECRET}
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+      N8N_SECURE_COOKIE: "false"
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      N8N_PUBLIC_API_DISABLED: "true"
+      N8N_RUNNERS_ENABLED: "true"
+      DB_SQLITE_POOL_SIZE: "2"
+      N8N_EDITOR_BASE_URL: ${N8N_PUBLIC_URL:-http://localhost:5678}
+      WEBHOOK_URL: ${N8N_PUBLIC_URL:-http://localhost:5678}
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: "168"
+      GENERIC_TIMEZONE: ${TIMEZONE:-Europe/Paris}
+      TZ: ${TIMEZONE:-Europe/Paris}
+      RAG_URL: http://rag:8000
+      RAG_API_TOKEN: ${RAG_API_TOKEN}
+      CHAT_USER: ${CHAT_USER:-moi}
+      CHAT_PASSWORD: ${CHAT_PASSWORD}
+    entrypoint: ["/bin/sh", "/scripts/n8n-import.sh"]
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/import/workflows:ro
+      - ./scripts:/scripts:ro
+
+  n8n:
+    <<: [*base, *dns]
+    image: n8nio/n8n:${N8N_VERSION:-2.45.7}
+    environment: *n8n-env
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:${N8N_PORT:-5678}:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5678/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 30
+    depends_on:
+      n8n-import:
+        condition: service_completed_successfully
+      rag:
+        condition: service_started
+
+  # Sauvegarde quotidienne : conversations + état de l'index (rag) et données n8n → backups/
+  backup:
+    <<: *base
+    image: alpine:3.20
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    entrypoint: ["sh", "/scripts/backup-loop.sh"]
+    environment:
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-7}
+      TZ: ${TIMEZONE:-Europe/Paris}
+    volumes:
+      - ./backups:/backups
+      - ./scripts:/scripts:ro
+      - rag_state:/data/rag:ro
+      - n8n_data:/data/n8n:ro
+
+volumes:
+  rag_state:
+  qdrant_data:
+  n8n_data:

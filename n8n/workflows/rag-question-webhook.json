@@ -1,0 +1,106 @@
+{
+  "id": "ragAskWebhook01",
+  "name": "RAG – Question (API webhook)",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "a1",
+      "name": "Question reçue",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "b8f2c6d4-1e3a-4f5b-9c7d-2a6e8f0b1c3d",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rag-ask",
+        "authentication": "basicAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "ragBasicAuth0001",
+          "name": "Accès RAG (identifiants du chat)"
+        }
+      }
+    },
+    {
+      "id": "a2",
+      "name": "Demander au RAG",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_URL }}/api/ask",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.RAG_API_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ question: $json.body.question || $json.body.q || '', mode: $json.body.mode || 'auto' }) }}",
+        "options": {
+          "timeout": 900000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "a3",
+      "name": "Renvoyer la réponse",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        520,
+        0
+      ],
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Question reçue": {
+      "main": [
+        [
+          {
+            "node": "Demander au RAG",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Demander au RAG": {
+      "main": [
+        [
+          {
+            "node": "Renvoyer la réponse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+backups/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Données personnelles : jamais publiées (seul documents/ajouts/.gitkeep est versionné)
+documents/*
+!documents/ajouts/
+documents/ajouts/*
+!documents/ajouts/.gitkeep
